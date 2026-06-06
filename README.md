@@ -1,96 +1,54 @@
 # ternary-activation
 
-[![crates.io](https://img.shields.io/crates/v/ternary-activation.svg)](https://crates.io/crates/v/ternary-activation)
+**Non-linearities born ternary — ReLU, sigmoid, tanh, GELU, and softmax, mapped to {-1, 0, +1}.**
+
+[![crates.io](https://img.shields.io/crates/v/ternary-activation.svg)](https://crates.io/crates/ternary-activation)
 [![docs.rs](https://docs.rs/ternary-activation/badge.svg)](https://docs.rs/ternary-activation)
 
-**Ternary activation functions for neural networks in ℤ₃ = {-1, 0, 1}.**
+## Why This Exists
 
-A Rust library implementing ℤ₃ analogues of classical neural network activation functions. Each activation maps continuous or ternary input to ternary output ∈ {-1, 0, 1}, providing the non-linear transformations needed for ternary neural networks.
+Activation functions are what make neural networks nonlinear. Without them, stacking layers is just one big linear transformation. ReLU kills negatives. Sigmoid squashes to (0, 1). GELU gates by magnitude. Tanh saturates symmetrically.
 
-## Why Ternary Activations?
+In a ternary network, all values are {-1, 0, +1}. You can't apply continuous ReLU and get a continuous output — you'd leave ternary space. You need activation functions that *quantize* their outputs while preserving the essential shape of the original: monotonicity, symmetry, saturation behavior.
 
-In ternary neural networks, all values are trits ∈ {-1, 0, 1}. Traditional activation functions (ReLU, sigmoid, tanh, GELU) produce continuous outputs that must be quantized. This library provides **principled ternary approximations** of these functions that:
+This crate provides principled ternary approximations of seven classic activation functions, plus batch application utilities.
 
-1. **Preserve the essential shape** of the original function (monotonicity, symmetry, etc.)
-2. **Map cleanly to ℤ₃** with well-defined quantization boundaries
-3. **Are efficient to compute** — no floating-point hardware needed at inference
-4. **Maintain gradient-friendly properties** for training with Straight-Through Estimators
+## The Key Insight
 
-## Activation Functions
+Every activation in this crate follows one pattern: compute the continuous version, then quantize to the nearest trit via threshold rounding:
 
-### Ternary Sign
-The simplest activation: identity on {-1, 0, 1}, quantization for continuous input.
 ```
-x < 0 → -1    x = 0 → 0    x > 0 → +1
+f(x) < -threshold → -1
+|f(x)| ≤ threshold →  0
+f(x) >  threshold → +1
 ```
-Use case: Final quantization step, binary classification output.
 
-### Ternary ReLU
-Negative values are zeroed; positive and zero pass through.
-```
-x ≤ 0 → 0    x > 0 → +1
-```
-Note: Since output is ternary, the distinction between "small positive" and "large positive" is lost. This is the ℤ₃ equivalent of the hard sigmoid.
+The threshold varies by function. For sign, it's 0. For tanh, it's 1/3 (relative to tanh's output range). For GELU and Swish, it's 0.5. This isn't arbitrary — each threshold is chosen so the ternary approximation preserves the critical inflection points of the continuous function.
 
-### Ternary Sigmoid
-A three-level step function with configurable threshold.
-```
-x < -t → -1    |x| ≤ t → 0    x > t → +1
-```
-This is the ternary analogue of the sigmoid's S-curve, reduced to three discrete levels. The threshold parameter `t` controls the dead zone width.
+The result: activation functions that behave like their continuous counterparts *at decision boundaries* while living entirely in Z₃.
 
-### Ternary Tanh
-Applies continuous tanh, then quantizes to the nearest trit.
-```
-tanh(x) < -1/3 → -1    |tanh(x)| ≤ 1/3 → 0    tanh(x) > 1/3 → +1
-```
-Preserves the symmetry and saturation properties of tanh while mapping to ℤ₃.
+## Quick Start
 
-### Ternary Softmax
-Argmax-style: marks the maximum position as +1, the minimum as -1, and all others as 0.
+```toml
+[dependencies]
+ternary-activation = "0.1"
 ```
-max(logits) → +1    min(logits) → -1    others → 0
-```
-This provides a "hard" attention mechanism suitable for ternary attention layers.
-
-### Ternary GELU
-Approximates GELU(x) = x · Φ(x) using the tanh approximation, then quantizes.
-```
-GELU(x) < -0.5 → -1    |GELU(x)| ≤ 0.5 → 0    GELU(x) > 0.5 → +1
-```
-The GELU function is approximately zero for negative inputs (since Φ(x) → 0) and approximately x for large positive inputs. In ternary space, this means negative inputs typically map to 0, while positive inputs map to 1.
-
-### Swish Ternary
-Approximates Swish(x) = x · σ(x), then quantizes.
-```
-Swish(x) < -0.5 → -1    |Swish(x)| ≤ 0.5 → 0    Swish(x) > 0.5 → +1
-```
-The Swish function is self-gated: for large positive x, σ(x) → 1 so Swish(x) → x. For negative x, Swish dips slightly below 0 then returns to 0.
-
-### Leaky Ternary ReLU
-Like ternary ReLU, but negative inputs below a threshold map to -1 instead of 0.
-```
-x < -t → -1    |x| ≤ t → 0    x > 0 → +1
-```
-The "leak" allows negative information to flow through, which can help with gradient flow during training.
-
-## Usage
 
 ```rust
 use ternary_activation::*;
 
-// Individual activations
-let t = ternary_sign(-2.5);       // Trit::NegOne
-let t = ternary_relu(0.001);      // Trit::One
-let t = ternary_sigmoid(0.0, 0.5); // Trit::Zero
-let t = ternary_tanh(3.0);        // Trit::One
-let t = ternary_gelu(1.0);        // Trit::One
-let t = swish_ternary(2.0);       // Trit::One
-let t = leaky_ternary_relu(-1.0, 0.1); // Trit::NegOne
+// Individual activations — continuous input → Trit output
+let a = ternary_sign(-2.5);        // NegOne
+let b = ternary_relu(0.001);       // One
+let c = ternary_sigmoid(0.0, 0.5); // Zero (in the dead zone)
+let d = ternary_tanh(3.0);         // One (saturated positive)
+let e = ternary_gelu(1.0);         // One
+let f = swish_ternary(2.0);        // One
+let g = leaky_ternary_relu(-1.0, 0.1); // NegOne (leaks negative signal)
 
-// Softmax over a vector
+// Ternary softmax — attention / classification
 let logits = vec![0.1, -0.5, 0.8];
-let probs = ternary_softmax(&logits);
+let attn = ternary_softmax(&logits);
 // → [Zero, NegOne, One]  (max=0.8→One, min=-0.5→NegOne)
 
 // Batch application
@@ -99,30 +57,184 @@ let outputs = apply_activation(&inputs, &ternary_relu);
 // → [Zero, Zero, One, One]
 ```
 
-## Quantization Strategy
+## The Activation Functions
 
-All activations follow a consistent quantization pattern:
+### Ternary Sign — The Identity
 
 ```
-continuous_output < -threshold → Trit::NegOne
-|continuous_output| ≤ threshold → Trit::Zero
-continuous_output > threshold  → Trit::One
+x < 0 → -1    x = 0 → 0    x > 0 → +1
 ```
 
-The threshold varies by function:
-| Function | Threshold |
-|----------|-----------|
-| Sign | 0 |
-| ReLU | 0 |
-| Sigmoid | configurable (default 0.5) |
-| Tanh | 1/3 (relative to tanh output range) |
-| GELU | 0.5 |
-| Swish | 0.5 |
-| Leaky ReLU | configurable for negative, 0 for positive |
+Identity on ternary input. Quantization for continuous input. The simplest possible nonlinearity.
 
-## Training with Ternary Activations
+**Use when:** Final output quantization, binary decisions.
 
-During training, use the **Straight-Through Estimator (STE)**: compute the continuous activation for the gradient, but pass the ternary output forward. This library provides the forward pass; the gradient estimation should be handled by your training framework.
+### Ternary ReLU — The Killer of Negatives
+
+```
+x ≤ 0 → 0    x > 0 → +1
+```
+
+ReLU kills negative values. Ternary ReLU does the same: everything non-positive becomes zero, everything positive becomes +1. Since the output is ternary, there's no distinction between "slightly positive" and "very positive" — it's all +1.
+
+**Use when:** Standard hidden layer activation, like ReLU in float networks.
+
+### Ternary Sigmoid — The Three-Level Step
+
+```
+x < -t → -1    |x| ≤ t → 0    x > t → +1
+```
+
+A step function with a configurable dead zone. Threshold `t` controls the width of the "neutral" region. This is the ternary analog of sigmoid's S-curve, reduced to three discrete levels.
+
+**Use when:** Gated architectures, where you want a clear "off / uncertain / on" decision.
+
+### Ternary Tanh — Symmetric Saturation
+
+```
+tanh(x) < -1/3 → -1    |tanh(x)| ≤ 1/3 → 0    tanh(x) > 1/3 → +1
+```
+
+Applies continuous tanh, then quantizes at ±1/3 boundaries. Preserves tanh's symmetry (f(-x) = -f(x)) and saturation behavior.
+
+**Use when:** Symmetric activations, recurrent networks, anywhere tanh is traditional.
+
+### Ternary Softmax — Hard Attention
+
+```
+max(logits) → +1    min(logits) → -1    others → 0
+```
+
+Not a probability distribution — it's a hard decision. The maximum gets +1, the minimum gets -1, everything else is 0. This is ternary attention: focus on the strongest signal, anti-focus on the weakest.
+
+**Use when:** Ternary attention mechanisms, hard classification, sparse selection.
+
+### Ternary GELU — The Gaussian Gate
+
+```
+GELU(x) < -0.5 → -1    |GELU(x)| ≤ 0.5 → 0    GELU(x) > 0.5 → +1
+```
+
+GELU gates by magnitude: small values are suppressed, large values pass through. In ternary space, this means negative inputs → 0 (suppressed), large positive inputs → +1. Uses the tanh approximation for the CDF.
+
+**Use when:** Transformer architectures where GELU is the standard. Drop-in ternary replacement.
+
+### Swish Ternary — Self-Gated
+
+```
+Swish(x) < -0.5 → -1    |Swish(x)| ≤ 0.5 → 0    Swish(x) > 0.5 → +1
+```
+
+Swish(x) = x × σ(x). Self-gated: the sigmoid acts as a gate on the input itself. For large positive x, Swish → x. For negative x, Swish dips below zero then returns to 0.
+
+**Use when:** When Swish outperforms ReLU in your architecture and you want the ternary equivalent.
+
+### Leaky Ternary ReLU — Negative Information Flows
+
+```
+x < -t → -1    |x| ≤ t → 0    x > 0 → +1
+```
+
+Like ternary ReLU, but negative inputs below `-t` map to -1 instead of 0. The "leak" allows negative information to flow through the network, improving gradient flow during training.
+
+**Use when:** Gradient flow through negative activations matters. Ternary networks with deep architectures.
+
+## Quantization Thresholds
+
+| Function | Threshold | Rationale |
+|----------|-----------|-----------|
+| Sign | 0 | Zero is the natural boundary |
+| ReLU | 0 | Positive/non-positive split |
+| Sigmoid | configurable | Task-dependent dead zone |
+| Tanh | 1/3 | Relative to tanh output range [-1, 1] |
+| GELU | 0.5 | Half the ternary step size |
+| Swish | 0.5 | Half the ternary step size |
+| Leaky ReLU | configurable | Task-dependent negative threshold |
+
+## API Reference
+
+### Core Type
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Trit { NegOne = -1, Zero = 0, One = 1 }
+
+impl Trit {
+    fn to_i8(self) -> i8;
+    fn from_i8(v: i8) -> Self;
+}
+```
+
+### Activation Functions
+
+```rust
+fn ternary_sign(x: f64) -> Trit;
+fn ternary_relu(x: f64) -> Trit;
+fn ternary_sigmoid(x: f64, threshold: f64) -> Trit;
+fn ternary_tanh(x: f64) -> Trit;
+fn ternary_softmax(logits: &[f64]) -> Vec<Trit>;
+fn ternary_gelu(x: f64) -> Trit;
+fn swish_ternary(x: f64) -> Trit;
+fn leaky_ternary_relu(x: f64, leak_threshold: f64) -> Trit;
+```
+
+### Batch Application
+
+```rust
+fn apply_activation(inputs: &[f64], func: &dyn Fn(f64) -> Trit) -> Vec<Trit>;
+```
+
+## Training: The Straight-Through Estimator
+
+Ternary activations are not differentiable (they're step functions). During training, use the **Straight-Through Estimator (STE)**: pass the ternary value forward, but use the continuous activation for the gradient.
+
+```rust
+// Pseudocode for STE during training:
+let continuous = x.tanh();
+let ternary = ternary_tanh(x);
+// Forward: use ternary
+// Backward: gradient flows through continuous as if ternary == continuous
+```
+
+This crate provides the forward pass. Your training framework handles the STE gradient estimation.
+
+## Real-World Example: Ternary Transformer Block
+
+```rust
+// Attention scores → ternary softmax → hard attention
+let attention_scores = vec![-0.5, 0.3, 1.2, -0.1];
+let attention_weights = ternary_softmax(&attention_scores);
+// [NegOne, Zero, One, Zero] — focus on position 2, ignore position 0
+
+// After attention, apply GELU to FFN output
+let ffn_output = vec![-0.3, 0.8, 1.5, -2.0];
+let activated = apply_activation(&ffn_output, &ternary_gelu);
+// [Zero, One, One, Zero] — GELU suppresses negatives and small values
+```
+
+## Performance Characteristics
+
+All activations are O(1) per element (constant-time comparisons and lookups). The tanh-based activations (ternary_tanh, ternary_gelu, swish_ternary) involve one floating-point operation each — still O(1), but slightly more expensive than pure comparison-based activations (sign, relu, sigmoid).
+
+Ternary softmax is O(n) for n logits (find max and min in one pass).
+
+Memory: Trit is an enum (1 byte). A Vec<Trit> for 1M activations is 1 MB.
+
+## Ecosystem Connections
+
+Activations are the glue between layers:
+
+- [`ternary-matmul`](https://github.com/SuperInstance/ternary-matmul) — outputs fed to these activations
+- [`ternary-conv`](https://github.com/SuperInstance/ternary-conv) — convolution outputs fed to these activations
+- [`ternary-norm`](https://github.com/SuperInstance/ternary-norm) — normalization typically precedes activation
+- [`ternary-loss`](https://github.com/SuperInstance/ternary-loss) — losses computed on activated outputs
+- [`ternary-optimizer`](https://github.com/SuperInstance/ternary-optimizer) — STE gradients flow through these
+
+## Open Questions
+
+- **Learnable thresholds**: The sigmoid and leaky ReLU thresholds are fixed. Could they be learned during training, like PReLU learns its leak slope?
+- **Ternary SiLU / Mish**: Other modern activations haven't been ternarized yet. The pattern is straightforward (continuous → quantize), but the thresholds need empirical validation.
+- **Multi-threshold activations**: Instead of one threshold, use two: a narrow "strong activation" band and a wider "weak activation" band. Would require more than three output levels.
 
 ## Testing
 
@@ -130,16 +242,7 @@ During training, use the **Straight-Through Estimator (STE)**: compute the conti
 cargo test
 ```
 
-All 18 tests pass, covering:
-- Sign function identity on trits and continuous mapping
-- ReLU zeroing behavior
-- Sigmoid stepping with default and custom thresholds
-- Tanh scaling and symmetry
-- Softmax argmax, min-max, single element, empty, and equal-value cases
-- GELU approximation bounds and known values
-- Swish at key points
-- Leaky ReLU with threshold
-- Cross-function validation: all activations produce valid trits for all inputs
+18 tests covering: sign identity on trits and continuous mapping, ReLU zeroing behavior, sigmoid stepping with default and custom thresholds, tanh scaling and symmetry, softmax argmax/min-max/single element/empty/equal values, GELU approximation bounds and known values, Swish at key points, leaky ReLU with threshold, cross-function validation (all activations produce valid trits for all inputs).
 
 ## License
 
